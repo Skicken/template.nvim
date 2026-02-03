@@ -5,14 +5,12 @@ local sep = uv.os_uname().sysname == 'Windows_NT' and '\\' or '/'
 local cursor_pattern = '{{_cursor_}}'
 local renderer = {
   expressions = {},
-  expression_replacer_map = {}
+  expression_replacer_map = {},
 }
 
----@param expr string
----@param replacer function(match: string): string
-renderer.register = function (expr, replacer)
+renderer.register = function(expr, replacer)
   if renderer.expression_replacer_map[expr] then
-    vim.notify('The expression '..expr..' is registered already. Will not add the replacer.', vim.log.levels.ERROR)
+    vim.notify('The expression ' .. expr .. ' is registered already. Will not add the replacer.', vim.log.levels.ERROR)
     return
   end
   table.insert(renderer.expressions, expr)
@@ -20,38 +18,52 @@ renderer.register = function (expr, replacer)
 end
 
 renderer.register_builtins = function()
-  renderer.register('{{_date_}}', function(_) return os.date('%Y-%m-%d %H:%M:%S') end)
-  renderer.register(cursor_pattern, function(_) return '' end)
-  renderer.register('{{_file_name_}}', function(_) return fn.expand('%:t:r') end)
-  renderer.register('{{_author_}}', function(_) return temp.author end)
-  renderer.register('{{_email_}}', function(_) return temp.email end)
-  renderer.register('{{_variable_}}', function(_) return vim.fn.input('Variable name: ', '') end)
-  renderer.register('{{_upper_file_}}', function(_) return string.upper(fn.expand('%:t:r')) end)
+  renderer.register('{{_date_}}', function(_)
+    return os.date('%Y-%m-%d %H:%M:%S')
+  end)
+  renderer.register(cursor_pattern, function(_)
+    return ''
+  end)
+  renderer.register('{{_file_name_}}', function(_)
+    return fn.expand('%:t:r')
+  end)
+  renderer.register('{{_author_}}', function(_)
+    return temp.author
+  end)
+  renderer.register('{{_email_}}', function(_)
+    return temp.email
+  end)
+  renderer.register('{{_variable_}}', function(_)
+    return vim.fn.input('Variable name: ', '')
+  end)
+  renderer.register('{{_upper_file_}}', function(_)
+    return string.upper(fn.expand('%:t:r'))
+  end)
   renderer.register('{{_lua:(.-)_}}', function(matched_expression)
     return load('return ' .. matched_expression)()
   end)
   renderer.register('{{_tomorrow_}}', function()
     local t = os.date('*t')
     t.day = t.day + 1
-    ---@diagnostic disable-next-line: param-type-mismatch
+
     return os.date('%c', os.time(t))
   end)
   renderer.register('{{_camel_file_}}', function(_)
-      local file_name = fn.expand('%:t:r')
-      local camel_case_file_name = ''
-      local up_next = true
-      for i = 1, #file_name do
-        local char = file_name:sub(i,i)
-        if char == '_' then
-          up_next = true
-        elseif up_next then
-          camel_case_file_name = camel_case_file_name..string.upper(char)
-          up_next = false
-        else
-          camel_case_file_name = camel_case_file_name..char
-        end
+    local file_name = fn.expand('%:t:r')
+    local camel_case_file_name = ''
+    local up_next = true
+    for i = 1, #file_name do
+      local char = file_name:sub(i, i)
+      if char == '_' then
+        up_next = true
+      elseif up_next then
+        camel_case_file_name = camel_case_file_name .. string.upper(char)
+        up_next = false
+      else
+        camel_case_file_name = camel_case_file_name .. char
       end
-      return camel_case_file_name
+    end
+    return camel_case_file_name
   end)
 end
 
@@ -114,7 +126,6 @@ local function expand_expressions(line)
   return line, cursor
 end
 
---@private
 local function create_and_load(file)
   local current_path = fn.getcwd()
   file = current_path .. sep .. file
@@ -144,13 +155,13 @@ end
 local function async_read(path, callback)
   uv.fs_open(path, 'r', 438, function(err, fd)
     assert(not err, err)
-    ---@diagnostic disable-next-line: redefined-local
+
     uv.fs_fstat(fd, function(err, stat)
       assert(not err, err)
-      ---@diagnostic disable-next-line: redefined-local
+
       uv.fs_read(fd, stat.size, 0, function(err, data)
         assert(not err, err)
-        ---@diagnostic disable-next-line: redefined-local
+
         uv.fs_close(fd, function(err)
           assert(not err, err)
           return callback(data)
@@ -187,43 +198,49 @@ function temp:generate_template(args)
     return
   end
 
-  local lines = {}
-
   async_read(
     tpl,
-    ---@diagnostic disable-next-line: redefined-local
     vim.schedule_wrap(function(data)
-      local cursor_pos = {}
       data = data:gsub('\r\n?', '\n')
       local tbl = vim.split(data, '\n')
 
-      local skip_lines = 0
+      local lines = {}
+      local cursor_pos = nil
+      local skip_first_line = false
 
       for i, v in ipairs(tbl) do
         if i == 1 then
-          local line_data = vim.split(v, '%s')
-          if #line_data == 2 and ";;" == line_data[1] then
-            skip_lines = skip_lines + 1
-            goto continue
+          local parts = vim.split(v, '%s+')
+          if #parts == 2 and parts[1] == ';;' then
+            skip_first_line = true
           end
         end
-        local line, cursor = expand_expressions(v)
-        lines[#lines + 1] = line
-        if cursor then
-          cursor_pos = { i - skip_lines, 2 }
+
+        if not (i == 1 and skip_first_line) then
+          local line, cursor = expand_expressions(v)
+          table.insert(lines, line)
+
+          if cursor and not cursor_pos then
+            cursor_pos = {
+              i - (skip_first_line and 1 or 0),
+              2,
+            }
+          end
         end
-        ::continue::
       end
 
       local cur_line = api.nvim_win_get_cursor(0)[1]
       local start = cur_line
-      if cur_line == 1 and #api.nvim_get_current_line() == 0 then
+
+      if cur_line == 1 and api.nvim_get_current_line() == '' then
         start = cur_line - 1
       end
-      api.nvim_buf_set_lines(current_buf, start, cur_line, false, lines)
-      cursor_pos[1] = start ~= 0 and cur_line + cursor_pos[1] or cursor_pos[1]
 
-      if next(cursor_pos) ~= nil then
+      api.nvim_buf_set_lines(current_buf, start, cur_line, false, lines)
+
+      if cursor_pos then
+        cursor_pos[1] = (start ~= 0) and (cur_line + cursor_pos[1]) or cursor_pos[1]
+
         api.nvim_win_set_cursor(0, cursor_pos)
         vim.cmd('startinsert!')
       end
